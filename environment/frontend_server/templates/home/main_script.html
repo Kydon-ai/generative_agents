@@ -265,8 +265,17 @@
 	  // OLD NOTE: Create a sprite with physics enabled via the physics system. 
 	  // The image  used for the sprite has a bit of whitespace, so I'm using 
 	  // setSize & setOffset to control the size of the player's body.
+	  // Start the camera at the first persona so the agents are visible as soon
+	  // as the simulation or replay page opens. The old fixed start point
+	  // (800, 288) was far from the agents in this map.
+	  let camera_start = [800, 288];
+	  let first_persona_name = Object.keys(spawn_tile_loc)[0];
+	  if (first_persona_name) {
+	    camera_start = [spawn_tile_loc[first_persona_name][0] * tile_width + tile_width / 2,
+	                    spawn_tile_loc[first_persona_name][1] * tile_width + tile_width];
+	  }
 	  player = this.physics.add.
-	                sprite(800, 288, "atlas", "misa-front").
+	                sprite(camera_start[0], camera_start[1], "atlas", "misa-front").
 	                setSize(30, 40).
 	                setOffset(0, 0);
 	  player.setDepth(-1);
