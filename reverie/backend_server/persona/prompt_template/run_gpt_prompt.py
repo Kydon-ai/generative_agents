@@ -66,9 +66,10 @@ def run_gpt_prompt_wake_up_hour(persona, test_input=None, verbose=False):
     fs = 8
     return fs
 
-  gpt_param = {"engine": "text-davinci-002", "max_tokens": 5, 
+  gpt_param = {"engine": "text-davinci-002", "max_tokens": 128,
              "temperature": 0.8, "top_p": 1, "stream": False,
-             "frequency_penalty": 0, "presence_penalty": 0, "stop": ["\n"]}
+             "frequency_penalty": 0, "presence_penalty": 0, "stop": ["\n"],
+             "reasoning_effort": "minimal"}
   prompt_template = "persona/prompt_template/v2/wake_up_hour_v1.txt"
   prompt_input = create_prompt_input(persona, test_input)
   prompt = generate_prompt(prompt_input, prompt_template)
@@ -111,24 +112,20 @@ def run_gpt_prompt_daily_plan(persona,
     return prompt_input
 
   def __func_clean_up(gpt_response, prompt=""):
-    cr = []
-    _cr = gpt_response.split(")")
-    for i in _cr: 
-      if i[-1].isdigit(): 
-        i = i[:-1].strip()
-        if i[-1] == "." or i[-1] == ",": 
-          cr += [i[:-1].strip()]
+    cr = re.findall(r"(?m)^\s*\d+[\).]\s*(.+?)\s*$", gpt_response)
+    cr = [item.rstrip(" .,") for item in cr if item.strip()]
+    if not cr:
+      raise ValueError("No numbered daily-plan items were returned")
     return cr
 
   def __func_validate(gpt_response, prompt=""):
     try: __func_clean_up(gpt_response, prompt="")
     except: 
       return False
-    return True
+    return bool(__func_clean_up(gpt_response, prompt=prompt))
 
   def get_fail_safe(): 
-    fs = ['wake up and complete the morning routine at 6:00 am', 
-          'eat breakfast at 7:00 am', 
+    fs = ['eat breakfast at 7:00 am',
           'read a book from 8:00 am to 12:00 pm', 
           'have lunch at 12:00 pm', 
           'take a nap from 1:00 pm to 4:00 pm', 
@@ -138,16 +135,24 @@ def run_gpt_prompt_daily_plan(persona,
 
 
   
-  gpt_param = {"engine": "text-davinci-003", "max_tokens": 500, 
+  gpt_param = {"engine": "text-davinci-003", "max_tokens": 768,
                "temperature": 1, "top_p": 1, "stream": False,
-               "frequency_penalty": 0, "presence_penalty": 0, "stop": None}
+               "frequency_penalty": 0, "presence_penalty": 0, "stop": None,
+               "reasoning_effort": "minimal"}
   prompt_template = "persona/prompt_template/v2/daily_planning_v6.txt"
   prompt_input = create_prompt_input(persona, wake_up_hour, test_input)
   prompt = generate_prompt(prompt_input, prompt_template)
+  prompt += (
+    "\nContinue the numbered plan with one item per line. Follow the persona's "
+    "daily plan requirements, especially fixed work hours and commitments. "
+    "Return only numbered plan items; do not add an explanation."
+  )
   fail_safe = get_fail_safe()
 
   output = safe_generate_response(prompt, gpt_param, 5, fail_safe,
                                    __func_validate, __func_clean_up)
+  if output and output[0].strip().lower().startswith("wake up"):
+    output = output[1:]
   output = ([f"wake up and complete the morning routine at {wake_up_hour}:00 am"]
               + output)
 
@@ -183,6 +188,11 @@ def run_gpt_prompt_generate_hourly_schedule(persona,
     for count, i in enumerate(persona.scratch.daily_req): 
       intermission_str += f"{str(count+1)}) {i}, "
     intermission_str = intermission_str[:-2]
+    intermission_str += (
+      f"\nFor {curr_hour_str}, complete only the final activity line. "
+      "Return one short activity phrase after the words 'is'. "
+      "Do not repeat the schedule, include other hours, or explain your answer."
+    )
 
     prior_schedule = ""
     if p_f_ds_hourly_org: 
@@ -228,7 +238,7 @@ def run_gpt_prompt_generate_hourly_schedule(persona,
     return True
 
   def get_fail_safe(): 
-    fs = "asleep"
+    fs = "__HOURLY_SCHEDULE_GENERATION_FAILED__"
     return fs
 
   # # ChatGPT Plugin ===========================================================
@@ -265,9 +275,10 @@ def run_gpt_prompt_generate_hourly_schedule(persona,
   # # ChatGPT Plugin ===========================================================
 
 
-  gpt_param = {"engine": "text-davinci-003", "max_tokens": 50, 
+  gpt_param = {"engine": "text-davinci-003", "max_tokens": 256,
                "temperature": 0.5, "top_p": 1, "stream": False,
-               "frequency_penalty": 0, "presence_penalty": 0, "stop": ["\n"]}
+               "frequency_penalty": 0, "presence_penalty": 0, "stop": ["\n"],
+               "reasoning_effort": "minimal"}
   prompt_template = "persona/prompt_template/v2/generate_hourly_schedule_v2.txt"
   prompt_input = create_prompt_input(persona, 
                                      curr_hour_str, 
@@ -280,6 +291,13 @@ def run_gpt_prompt_generate_hourly_schedule(persona,
   
   output = safe_generate_response(prompt, gpt_param, 5, fail_safe,
                                    __func_validate, __func_clean_up)
+
+  if output == fail_safe:
+    raise RuntimeError(
+      "OpenRouter failed to generate the hourly activity for "
+      f"{persona.scratch.get_str_firstname()} at {curr_hour_str}. "
+      "See the preceding OpenRouter request errors."
+    )
   
   if debug or verbose: 
     print_run_prompts(prompt_template, persona, gpt_param, 
@@ -357,26 +375,30 @@ def run_gpt_prompt_task_decomp(persona,
     return prompt_input
 
   def __func_clean_up(gpt_response, prompt=""):
-    print ("TOODOOOOOO")
-    print (gpt_response)
-    print ("-==- -==- -==- ")
-
-    # TODO SOMETHING HERE sometimes fails... See screenshot
-    temp = [i.strip() for i in gpt_response.split("\n")]
-    _cr = []
     cr = []
-    for count, i in enumerate(temp): 
-      if count != 0: 
-        _cr += [" ".join([j.strip () for j in i.split(" ")][3:])]
-      else: 
-        _cr += [i]
-    for count, i in enumerate(_cr): 
-      k = [j.strip() for j in i.split("(duration in minutes:")]
-      task = k[0]
-      if task[-1] == ".": 
-        task = task[:-1]
-      duration = int(k[1].split(",")[0].strip())
-      cr += [[task, duration]]
+    for line in gpt_response.splitlines():
+      duration_match = re.search(
+        r"\(\s*duration\s+in\s+minutes\s*:\s*(\d+)\s*,",
+        line,
+        re.IGNORECASE,
+      )
+      if not duration_match:
+        continue
+
+      task = line[:duration_match.start()].strip()
+      task = re.sub(r"^\s*\d+[\).]\s*", "", task)
+      task = re.sub(
+        rf"^{re.escape(persona.scratch.get_str_firstname())}\s+is\s+",
+        "",
+        task,
+        flags=re.IGNORECASE,
+      )
+      task = task.rstrip(" .")
+      if task:
+        cr.append([task, int(duration_match.group(1))])
+
+    if not cr:
+      raise ValueError("No numbered subtasks with duration fields were returned")
 
     total_expected_min = int(prompt.split("(total duration in minutes")[-1]
                                    .split("):")[0].strip())
@@ -414,24 +436,29 @@ def run_gpt_prompt_task_decomp(persona,
     return cr
 
   def __func_validate(gpt_response, prompt=""): 
-    # TODO -- this sometimes generates error 
     try: 
-      __func_clean_up(gpt_response)
+      return bool(__func_clean_up(gpt_response, prompt=prompt))
     except: 
-      pass
-      # return False
-    return gpt_response
+      return False
 
   def get_fail_safe(): 
-    fs = ["asleep"]
+    fs = [[task, int(duration)]]
     return fs
 
-  gpt_param = {"engine": "text-davinci-003", "max_tokens": 1000, 
+  gpt_param = {"engine": "text-davinci-003", "max_tokens": 512,
              "temperature": 0, "top_p": 1, "stream": False,
-             "frequency_penalty": 0, "presence_penalty": 0, "stop": None}
+             "frequency_penalty": 0, "presence_penalty": 0, "stop": None,
+             "reasoning_effort": "minimal"}
   prompt_template = "persona/prompt_template/v2/task_decomp_v3.txt"
   prompt_input = create_prompt_input(persona, task, duration)
   prompt = generate_prompt(prompt_input, prompt_template)
+  prompt += (
+    f"\nReturn only numbered subtask lines in this exact format: "
+    f"1) {persona.scratch.get_str_firstname()} is [one subtask]. "
+    "(duration in minutes: 5, minutes left: 55). Use 5-minute increments, "
+    f"make the durations add up to exactly {duration} minutes, and do not "
+    "include explanations or other text."
+  )
   fail_safe = get_fail_safe()
 
   print ("?????")
@@ -633,6 +660,22 @@ def run_gpt_prompt_action_arena(action_description,
                                 maze, act_world, act_sector,
                                 test_input=None, 
                                 verbose=False):
+  raw_arena_options = persona.s_mem.get_str_accessible_sector_arenas(
+    f"{act_world}:{act_sector}"
+  )
+  arena_options = []
+  for arena in raw_arena_options.split(", "):
+    if "'s room" in arena and persona.scratch.last_name not in arena:
+      continue
+    if arena and arena not in arena_options:
+      arena_options.append(arena)
+
+  current_arena = maze.access_tile(persona.scratch.curr_tile)["arena"]
+  fallback_arena = (
+    current_arena if current_arena in arena_options
+    else (arena_options[0] if arena_options else current_arena)
+  )
+
   def create_prompt_input(action_description, persona, maze, act_world, act_sector, test_input=None): 
     prompt_input = []
     # prompt_input += [persona.scratch.get_str_name()]
@@ -683,28 +726,33 @@ def run_gpt_prompt_action_arena(action_description,
     return prompt_input
 
   def __func_clean_up(gpt_response, prompt=""):
-    cleaned_response = gpt_response.split("}")[0]
-    return cleaned_response
+    cleaned_response = gpt_response.strip().split("}")[0].strip().lstrip("{").strip()
+    for arena in arena_options:
+      if cleaned_response == arena or cleaned_response.lower().startswith(arena.lower()):
+        return arena
+    raise ValueError(f"Model returned an inaccessible arena: {cleaned_response!r}")
 
   def __func_validate(gpt_response, prompt=""): 
-    if len(gpt_response.strip()) < 1: 
+    try:
+      __func_clean_up(gpt_response, prompt=prompt)
+      return True
+    except Exception:
       return False
-    if "}" not in gpt_response:
-      return False
-    if "," in gpt_response: 
-      return False
-    return True
   
   def get_fail_safe(): 
-    fs = ("kitchen")
-    return fs
+    return fallback_arena
 
-  gpt_param = {"engine": "text-davinci-003", "max_tokens": 15, 
+  gpt_param = {"engine": "text-davinci-003", "max_tokens": 256,
                "temperature": 0, "top_p": 1, "stream": False,
-               "frequency_penalty": 0, "presence_penalty": 0, "stop": None}
+               "frequency_penalty": 0, "presence_penalty": 0, "stop": None,
+               "reasoning_effort": "minimal"}
   prompt_template = "persona/prompt_template/v1/action_location_object_vMar11.txt"
   prompt_input = create_prompt_input(action_description, persona, maze, act_world, act_sector)
   prompt = generate_prompt(prompt_input, prompt_template)
+  prompt += (
+    f"\nChoose exactly one area from this list: {', '.join(arena_options)}. "
+    "Return only the exact area name followed by a closing brace."
+  )
 
   fail_safe = get_fail_safe()
   output = safe_generate_response(prompt, gpt_param, 5, fail_safe,
