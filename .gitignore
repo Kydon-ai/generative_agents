@@ -94,6 +94,11 @@ celerybeat-schedule
 # virtualenv
 venv/
 ENV/
+.venv/
+
+# Local simulation runs and their generated snapshots are machine-specific.
+# Previously committed replay datasets remain tracked.
+/environment/frontend_server/storage/*
 
 # Spyder project settings
 .spyderproject
