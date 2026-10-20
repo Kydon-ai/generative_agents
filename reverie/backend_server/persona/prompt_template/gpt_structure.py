@@ -12,6 +12,7 @@ import time
 from utils import *
 
 openai.api_key = openai_api_key
+openai.api_base = "https://openrouter.ai/api/v1"
 
 def temp_sleep(seconds=0.1):
   time.sleep(seconds)
@@ -20,8 +21,9 @@ def ChatGPT_single_request(prompt):
   temp_sleep()
 
   completion = openai.ChatCompletion.create(
-    model="gpt-3.5-turbo", 
-    messages=[{"role": "user", "content": prompt}]
+    model="minimax/minimax-m3.1-flash:free",
+    messages=[{"role": "user", "content": prompt}],
+    reasoning_effort="minimal",
   )
   return completion["choices"][0]["message"]["content"]
 
@@ -46,13 +48,13 @@ def GPT4_request(prompt):
 
   try: 
     completion = openai.ChatCompletion.create(
-    model="gpt-4", 
+    model="minimax/minimax-m3.1-flash:free",
     messages=[{"role": "user", "content": prompt}]
     )
     return completion["choices"][0]["message"]["content"]
   
-  except: 
-    print ("ChatGPT ERROR")
+  except Exception as e:
+    print(f"OpenRouter chat request failed ({type(e).__name__}): {e}")
     return "ChatGPT ERROR"
 
 
@@ -71,13 +73,13 @@ def ChatGPT_request(prompt):
   # temp_sleep()
   try: 
     completion = openai.ChatCompletion.create(
-    model="gpt-3.5-turbo", 
+    model="minimax/minimax-m3.1-flash:free",
     messages=[{"role": "user", "content": prompt}]
     )
     return completion["choices"][0]["message"]["content"]
   
-  except: 
-    print ("ChatGPT ERROR")
+  except Exception as e:
+    print(f"OpenRouter chat request failed ({type(e).__name__}): {e}")
     return "ChatGPT ERROR"
 
 
@@ -208,20 +210,34 @@ def GPT_request(prompt, gpt_parameter):
   """
   temp_sleep()
   try: 
-    response = openai.Completion.create(
-                model=gpt_parameter["engine"],
-                prompt=prompt,
-                temperature=gpt_parameter["temperature"],
-                max_tokens=gpt_parameter["max_tokens"],
-                top_p=gpt_parameter["top_p"],
-                frequency_penalty=gpt_parameter["frequency_penalty"],
-                presence_penalty=gpt_parameter["presence_penalty"],
-                stream=gpt_parameter["stream"],
-                stop=gpt_parameter["stop"],)
-    return response.choices[0].text
-  except: 
-    print ("TOKEN LIMIT EXCEEDED")
-    return "TOKEN LIMIT EXCEEDED"
+    request_params = dict(
+      model="minimax/minimax-m3.1-flash:free",
+      messages=[{"role": "user", "content": prompt}],
+      temperature=gpt_parameter["temperature"],
+      max_tokens=max(256, int(gpt_parameter["max_tokens"])),
+      top_p=gpt_parameter["top_p"],
+      frequency_penalty=gpt_parameter["frequency_penalty"],
+      presence_penalty=gpt_parameter["presence_penalty"],
+      stop=gpt_parameter["stop"],
+      stream=False,
+    )
+    request_params["reasoning_effort"] = gpt_parameter.get(
+      "reasoning_effort", "minimal"
+    )
+
+    response = openai.ChatCompletion.create(**request_params)
+    choice = response["choices"][0]
+    content = choice["message"].get("content")
+    if not isinstance(content, str) or not content.strip():
+      print(
+        "OpenRouter returned no text content "
+        f"(finish_reason={choice.get('finish_reason')!r})"
+      )
+      return ""
+    return content
+  except Exception as e:
+    print(f"OpenRouter chat request failed ({type(e).__name__}): {e}")
+    return ""
 
 
 def generate_prompt(curr_input, prompt_lib_file): 
@@ -273,7 +289,7 @@ def safe_generate_response(prompt,
   return fail_safe_response
 
 
-def get_embedding(text, model="text-embedding-ada-002"):
+def get_embedding(text, model="openai/text-embedding-ada-002"):
   text = text.replace("\n", " ")
   if not text: 
     text = "this is blank"
